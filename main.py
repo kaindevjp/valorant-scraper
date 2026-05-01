@@ -1,8 +1,10 @@
 """
 Usage:
-  python main.py --url  "https://www.thespike.gg/jp/match/.../143054"
+  python main.py --url "https://www.thespike.gg/jp/match/.../143054"
   python main.py --match-ids 143054 143055 143056
-  python main.py --match-ids 143054 --force
+  python main.py --event-id 4043
+  python main.py --event-id 4043 --all          # 未開催も含む
+  python main.py --event-id 4043 --force        # 既存ファイルを上書き
 """
 
 import argparse
@@ -16,7 +18,7 @@ from scraper.logger import get_logger
 
 logger = get_logger(__name__)
 
-REQUEST_INTERVAL = 3.0  # 試合間の待機秒数
+REQUEST_INTERVAL = 3.0
 
 
 def _extract_match_id(url: str) -> str:
@@ -37,39 +39,54 @@ def _process(match_id: str, force: bool) -> bool:
     return True
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="thespike.gg 試合データ取得ツール")
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--url", help="試合ページの URL")
-    group.add_argument("--match-ids", nargs="+", metavar="ID", help="試合 ID（複数指定可）")
-    parser.add_argument("--force", action="store_true", help="既存ファイルを上書き")
-    args = parser.parse_args()
-
-    if args.url:
-        match_ids = [_extract_match_id(args.url)]
-    else:
-        match_ids = args.match_ids
-
+def _run_batch(match_ids: list[str], force: bool) -> None:
     errors: list[tuple[str, str]] = []
+    skipped = 0
 
     for i, match_id in enumerate(tqdm(match_ids, desc="取得中", unit="試合")):
         try:
-            processed = _process(match_id, args.force)
-            if processed and i < len(match_ids) - 1:
+            processed = _process(match_id, force)
+            if not processed:
+                skipped += 1
+            elif i < len(match_ids) - 1:
                 time.sleep(REQUEST_INTERVAL)
         except ValueError as e:
-            # 404 など回復不能なエラー
             logger.error("match %s: %s", match_id, e)
             errors.append((match_id, str(e)))
         except Exception as e:
             logger.error("match %s: unexpected error: %s", match_id, e)
             errors.append((match_id, str(e)))
 
-    print(f"\n完了: {len(match_ids) - len(errors)}/{len(match_ids)} 件取得")
+    fetched = len(match_ids) - len(errors) - skipped
+    print(f"\n完了: {fetched}件取得 / {skipped}件スキップ / {len(errors)}件エラー  (合計{len(match_ids)}件)")
     if errors:
-        print("エラー:")
+        print("エラー一覧:")
         for mid, msg in errors:
             print(f"  {mid}: {msg}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="thespike.gg 試合データ取得ツール")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--url", help="試合ページの URL（1試合）")
+    group.add_argument("--match-ids", nargs="+", metavar="ID", help="試合 ID（複数指定可）")
+    group.add_argument("--event-id", metavar="ID", help="イベント ID（例: 4043）")
+    parser.add_argument("--all", action="store_true", help="未開催試合も対象にする（--event-id と併用）")
+    parser.add_argument("--force", action="store_true", help="既存ファイルを上書き")
+    args = parser.parse_args()
+
+    if args.url:
+        match_ids = [_extract_match_id(args.url)]
+    elif args.match_ids:
+        match_ids = args.match_ids
+    else:
+        finished_only = not args.all
+        match_ids = api_client.fetch_event_match_ids(args.event_id, finished_only=finished_only)
+        if not match_ids:
+            print("対象の試合が見つかりませんでした。")
+            return
+
+    _run_batch(match_ids, args.force)
 
 
 if __name__ == "__main__":

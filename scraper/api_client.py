@@ -72,6 +72,38 @@ def fetch(match_id: str) -> MatchData:
     return _parse(match_id, match_raw, stats_raw)
 
 
+def fetch_event_match_ids(event_id: str, finished_only: bool = True) -> list[str]:
+    """イベント内の試合IDリストを返す。finished_only=True で終了済みのみ。"""
+    with httpx.Client(headers=HEADERS) as client:
+        logger.info("Fetching event %s match list ...", event_id)
+        event_raw = _get(client, f"{BASE_URL}/events/{event_id}")
+
+    match_ids: list[str] = []
+
+    # グループステージ
+    for group in event_raw.get("groups", []):
+        for m in group.get("matches", []):
+            if finished_only and not m.get("isFinished"):
+                continue
+            match_ids.append(str(m["id"]))
+
+    # プレーオフブラケット（winners / losers それぞれ stages[i].matches）
+    # matches の各要素は dict（試合）または [] （未確定スロット）の混在
+    for bracket in event_raw.get("brackets", []):
+        for section in ("winners", "middle", "losers"):
+            section_data = bracket.get(section, {})
+            for stage in section_data.get("stages", []):
+                for m in stage.get("matches", []):
+                    if not isinstance(m, dict):
+                        continue
+                    if finished_only and not m.get("isFinished"):
+                        continue
+                    match_ids.append(str(m["id"]))
+
+    logger.info("Found %d matches in event %s", len(match_ids), event_id)
+    return match_ids
+
+
 # ---------------------------------------------------------------------------
 # パース
 # ---------------------------------------------------------------------------
@@ -152,34 +184,42 @@ def _parse_maps(maps_raw: list, teams: list) -> list[MapResult]:
     return results
 
 
+def _f(value, default: float = 0.0) -> float:
+    """None や空文字を含む値を安全に float 変換する"""
+    try:
+        return float(value) if value is not None else default
+    except (ValueError, TypeError):
+        return default
+
+
 def _build_player_stat(p: dict, map_label: str, player_lookup: dict) -> PlayerStats | None:
     pid = p.get("playerId")
     if pid is None:
         return None
     info = player_lookup.get(pid, {})
-    kills = p.get("kills", 0)
-    deaths = p.get("deaths", 0)
+    kills = p.get("kills") or 0
+    deaths = p.get("deaths") or 0
     return PlayerStats(
         player_id=pid,
         player_name=p.get("nickname") or info.get("nickname", ""),
         team_id=p.get("teamId") or info.get("team_id", 0),
         team_name=info.get("team_name", ""),
         map=map_label,
-        rating=float(p.get("playerRating", 0)),
-        acs=float(p.get("averageCombatScore", 0)),
+        rating=_f(p.get("playerRating")),
+        acs=_f(p.get("averageCombatScore")),
         kills=kills,
         deaths=deaths,
-        assists=p.get("assists", 0),
+        assists=p.get("assists") or 0,
         plus_minus=kills - deaths,
-        kd=float(p.get("kdRatio", 0)),
-        kast=float(p.get("kastPercentageTotal", 0)),
-        adr=float(p.get("averageDamagePerRound", 0)),
-        hs_pct=float(p.get("headshotPercentage", 0)),
-        fbsr=float(p.get("firstBloodSuccessRate", 0)),
-        fb=p.get("firstBloods", 0),
-        fd=p.get("firstDeaths", 0),
-        econ_rating=float(p.get("econRating", 0)),
-        total_spent=p.get("totalSpent", 0),
+        kd=_f(p.get("kdRatio")),
+        kast=_f(p.get("kastPercentageTotal")),
+        adr=_f(p.get("averageDamagePerRound")),
+        hs_pct=_f(p.get("headshotPercentage")),
+        fbsr=_f(p.get("firstBloodSuccessRate")),
+        fb=p.get("firstBloods") or 0,
+        fd=p.get("firstDeaths") or 0,
+        econ_rating=_f(p.get("econRating")),
+        total_spent=p.get("totalSpent") or 0,
     )
 
 
