@@ -1,0 +1,5 @@
+playwright>=1.40
+httpx>=0.25
+jsonschema>=4.0
+tqdm>=4.60
+python-dotenv
